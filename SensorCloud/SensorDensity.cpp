@@ -24,7 +24,7 @@ void densityReader()
     ifstream inf;
     inf.open("density.xyz", ifstream::in);
     
-    const int count = 800;
+//    const int count = 800;
     string line;
     
     int i = 0;

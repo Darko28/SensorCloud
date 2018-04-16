@@ -24,13 +24,12 @@ struct ComputeParams {
 class SensorViewController: UIViewController {
     
 //    var numberOfObjects = 4_096
-    var numberOfObjects = 800
+    var numberOfObjects = 1600
     
     fileprivate var queue: MTLCommandQueue?
     fileprivate var library: MTLLibrary?
     fileprivate var computePipelineState: MTLComputePipelineState!
-    fileprivate var renderPipelineState1: MTLRenderPipelineState!
-    fileprivate var renderPipelineState2: MTLRenderPipelineState!
+    fileprivate var renderPipelineState: MTLRenderPipelineState!
     fileprivate var buffer: MTLCommandBuffer?
     
     fileprivate var positionsIn: MTLBuffer?
@@ -68,7 +67,6 @@ class SensorViewController: UIViewController {
         
         initializeMetal()
         initializePointCloud()
-        initializeSensorDensity()
         
         let panGestureRecognizer = UIPanGestureRecognizer(target: self, action: #selector(SensorViewController.panGestureRecognized(_:)))
         view.addGestureRecognizer(panGestureRecognizer)
@@ -96,27 +94,50 @@ class SensorViewController: UIViewController {
         angularVelocity = CGPoint(x: velocity.x * kVelocityScale, y: velocity.y * kVelocityScale)
     }
     
+//    var animationTimer: Timer?
+    var displayLink: CADisplayLink?
+    
+    var stop = false
+    
     @objc func tapGestureRecognized(_ tapGestureRecognizer: UITapGestureRecognizer) {
-        if DELTA == 0.0 {
-            DELTA = Float(0.0003)
-        } else {
+        if DELTA == 0.0 && !stop {
+            print("DELTA 0 tapped")
+//            DELTA = Float(0.0003)
+            stop = !stop
+
+            self.displayLink = CADisplayLink(target: self, selector: #selector(handleDisplayLink))
+            self.displayLink?.preferredFramesPerSecond = 1
+            self.displayLink?.add(to: RunLoop.current, forMode: RunLoopMode.defaultRunLoopMode)
+            
+        } else if DELTA != 0.0 || stop {
+            print("DELTA 1 tapped")
+            
+            self.displayLink?.invalidate()
+            self.displayLink = nil
             DELTA = Float(0.0)
+            
+            stop = !stop
+        }
+    }
+    
+    @objc func handleDisplayLink() {
+        if DELTA == 0.0 {
+            print("displayLink delta 0 tapped")
+            DELTA = 0.0003
+        } else {
+            print("displayLink delta 1 tapped")
+            DELTA = 0.0
         }
     }
     
     func initializePointCloud() {
         
-        if let file = Bundle.main.path(forResource: "sensor1", ofType: "xyz") {
-            xyz = XYZ(fromFile: file)
+        if let file1 = Bundle.main.path(forResource: "sensor1", ofType: "xyz"), let file2 = Bundle.main.path(forResource: "density", ofType: "xyz") {
+            xyz = XYZ(fromFile: file1)
+            sensorDensity = Density(fromFile: file2)
         }
         
         update()
-    }
-    
-    func initializeSensorDensity() {
-        if let file = Bundle.main.path(forResource: "density", ofType: "xyz") {
-            self.sensorDensity = Density(fromFile: file)
-        }
     }
     
     func initComputePipelineState(_ device: MTLDevice) {
@@ -130,26 +151,7 @@ class SensorViewController: UIViewController {
         }
     }
     
-    func initRenderPipelineState1(_ device: MTLDevice) {
-        
-        let renderPipelineStateDescriptor = MTLRenderPipelineDescriptor()
-        renderPipelineStateDescriptor.vertexFunction = library?.makeFunction(name: "vert")
-//        renderPipelineStateDescriptor.fragmentFunction = library?.makeFunction(name: "frag1")
-        renderPipelineStateDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
-        renderPipelineStateDescriptor.colorAttachments[0].isBlendingEnabled = true
-        renderPipelineStateDescriptor.colorAttachments[0].destinationRGBBlendFactor = .one
-        renderPipelineStateDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactor.one
-        renderPipelineStateDescriptor.colorAttachments[0].rgbBlendOperation = .add
-        renderPipelineStateDescriptor.colorAttachments[0].alphaBlendOperation = .add
-        
-        do {
-            renderPipelineState1 = try device.makeRenderPipelineState(descriptor: renderPipelineStateDescriptor)
-        } catch {
-            print("Failed to create render pipeline state1")
-        }
-    }
-    
-    func initRenderPipelineState2(_ device: MTLDevice) {
+    func initRenderPipelineState(_ device: MTLDevice) {
         
         let vertexDescriptor = MTLVertexDescriptor()
         
@@ -172,7 +174,7 @@ class SensorViewController: UIViewController {
         let renderPipelineStateDescriptor = MTLRenderPipelineDescriptor()
         renderPipelineStateDescriptor.label = "densityRenderPipeline"
         renderPipelineStateDescriptor.vertexFunction = library?.makeFunction(name: "vert")
-        renderPipelineStateDescriptor.fragmentFunction = library?.makeFunction(name: "frag2")
+        renderPipelineStateDescriptor.fragmentFunction = library?.makeFunction(name: "frag")
         renderPipelineStateDescriptor.vertexDescriptor = vertexDescriptor
         renderPipelineStateDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
         renderPipelineStateDescriptor.colorAttachments[0].isBlendingEnabled = true
@@ -182,7 +184,7 @@ class SensorViewController: UIViewController {
         renderPipelineStateDescriptor.colorAttachments[0].alphaBlendOperation = MTLBlendOperation.add
         
         do {
-            renderPipelineState2 = try device.makeRenderPipelineState(descriptor: renderPipelineStateDescriptor)
+            renderPipelineState = try device.makeRenderPipelineState(descriptor: renderPipelineStateDescriptor)
         } catch {
             print("Failed to create render pipeline state2")
         }
@@ -196,16 +198,14 @@ class SensorViewController: UIViewController {
         queue = device.makeCommandQueue()
         library = device.makeDefaultLibrary()
         
-        initComputePipelineState(device)
-        initRenderPipelineState1(device)
-        initRenderPipelineState2(device)
+//        initComputePipelineState(device)
+        initRenderPipelineState(device)
         
         let datasize = MemoryLayout<float4>.size * numberOfObjects
         print("datasize: \(datasize), MemoryLayout<float4>.size: \(MemoryLayout<float4>.size), MemoryLayout<float4>.stride: \(MemoryLayout<float4>.stride), MemoryLayout<float4>.alignment: \(MemoryLayout<float4>.alignment)")
         positionsIn = device.makeBuffer(length: datasize, options: .storageModeShared)
         positionsOut = device.makeBuffer(length: datasize, options: .storageModeShared)
         velocities = device.makeBuffer(length: datasize, options: .storageModeShared)
-        
         densityBuffer = device.makeBuffer(length: datasize, options: MTLResourceOptions.storageModeShared)
     }
     
@@ -219,11 +219,7 @@ class SensorViewController: UIViewController {
         //        let _velocities = velocities!.contents().bindMemory(to: Float.self, capacity: )
         //        let positions = unsafeBitCast(positionsIn!.contents(), to: UnsafeMutablePointer<Float>.self)
         let positions = positionsIn!.contents().assumingMemoryBound(to: Float.self)
-        print("positions: \(positions), positionsIn.contents(): \(positionsIn!.contents())")
         let _velocities = unsafeBitCast(velocities!.contents(), to: UnsafeMutablePointer<Float>.self)
-        print("velocities: \(_velocities), velocities.contents(): \(velocities!.contents())")
-        print("Float size, stride: \(MemoryLayout<Float>.size), \(MemoryLayout<Float>.stride)")
-        
         let densities = densityBuffer!.contents().assumingMemoryBound(to: Float.self)
         
         for i in 0...(numberOfObjects - 1) {
@@ -315,60 +311,32 @@ extension SensorViewController: MTKViewDelegate {
         
         buffer = queue?.makeCommandBuffer()
         
-        // Compute kernel
-        let groupsize = MTLSizeMake(512, 1, 1)
-        let numgroups = MTLSizeMake(numberOfObjects / 512, 1, 1)
-        
-        let computeEncoder = buffer!.makeComputeCommandEncoder()
-        computeEncoder?.setComputePipelineState(computePipelineState)
-        computeEncoder?.setBuffer(positionsIn, offset: 0, index: 0)
-        computeEncoder?.setBuffer(positionsOut, offset: 0, index: 1)
-        computeEncoder?.setBuffer(velocities, offset: 0, index: 2)
-        computeEncoder?.setBuffer(computeParams, offset: 0, index: 3)
-        computeEncoder?.dispatchThreadgroups(numgroups, threadsPerThreadgroup: groupsize)
-        computeEncoder?.endEncoding()
+//        // Compute kernel
+//        let groupsize = MTLSizeMake(512, 1, 1)
+//        let numgroups = MTLSizeMake(numberOfObjects / 512, 1, 1)
+//
+//        let computeEncoder = buffer!.makeComputeCommandEncoder()
+//        computeEncoder?.setComputePipelineState(computePipelineState)
+//        computeEncoder?.setBuffer(positionsIn, offset: 0, index: 0)
+//        computeEncoder?.setBuffer(positionsOut, offset: 0, index: 1)
+//        computeEncoder?.setBuffer(velocities, offset: 0, index: 2)
+//        computeEncoder?.setBuffer(computeParams, offset: 0, index: 3)
+//        computeEncoder?.dispatchThreadgroups(numgroups, threadsPerThreadgroup: groupsize)
+//        computeEncoder?.endEncoding()
         
         // Vertex and fragment shaders
         let renderPassDescriptor = view.currentRenderPassDescriptor
         renderPassDescriptor!.colorAttachments[0].loadAction = .clear
         renderPassDescriptor!.colorAttachments[0].clearColor = MTLClearColorMake(0.15, 0.15, 0.3, 1.0)
 //
-        let renderEncoder1 = buffer!.makeRenderCommandEncoder(descriptor: renderPassDescriptor!)
-        renderEncoder1?.setRenderPipelineState(renderPipelineState1)
-//        renderEncoder1?.setRenderPipelineState(renderPipelineState2)
-        renderEncoder1?.setVertexBuffer(positionsOut, offset: 0, index: 0)
-        renderEncoder1?.setVertexBuffer(renderParams, offset: 0, index: 1)
-        renderEncoder1?.setVertexBuffer(densityBuffer, offset: 0, index: 2)
-        renderEncoder1?.drawPrimitives(type: .point, vertexStart: 0, vertexCount: numberOfObjects)
-        renderEncoder1?.endEncoding()
-
-//        let renderEncoder2 = buffer!.makeRenderCommandEncoder(descriptor: renderPassDescriptor!)
-//        renderEncoder2?.setRenderPipelineState(renderPipelineState2)
-//        renderEncoder2?.setVertexBuffer(densityBuffer, offset: 0, index: 0)
-////        renderEncoder2?.setFragmentBuffer(densityBuffer, offset: 0, index: 1)
-//        renderEncoder2?.drawPrimitives(type: .point, vertexStart: 0, vertexCount: numberOfObjects)
-//        renderEncoder2?.endEncoding()
-        
-        
-        
-//        let parallelRenderCommandEncoder = buffer!.makeParallelRenderCommandEncoder(descriptor: renderPassDescriptor!)
-//
-//        let renderCommandEncoder1 = parallelRenderCommandEncoder?.makeRenderCommandEncoder()
-//        let renderCommandEncoder2 = parallelRenderCommandEncoder?.makeRenderCommandEncoder()
-//
-//        renderCommandEncoder1?.setRenderPipelineState(renderPipelineState1)
-//        renderCommandEncoder1?.setVertexBuffer(positionsOut, offset: 0, index: 0)
-//        renderCommandEncoder1?.setVertexBuffer(renderParams, offset: 0, index: 1)
-//        renderCommandEncoder1?.drawPrimitives(type: .point, vertexStart: 0, vertexCount: numberOfObjects)
-//        renderCommandEncoder1?.endEncoding()
-//
-//        renderCommandEncoder2?.setRenderPipelineState(renderPipelineState2)
-//        renderCommandEncoder2?.setVertexBuffer(densityBuffer, offset: 0, index: 0)
-////        renderCommandEncoder2?.setVertexBuffer(renderParams, offset: 0, index: 1)
-//        renderCommandEncoder2?.drawPrimitives(type: .point, vertexStart: 0, vertexCount: numberOfObjects)
-//        renderCommandEncoder2?.endEncoding()
-//
-//        parallelRenderCommandEncoder?.endEncoding()
+        let renderEncoder = buffer!.makeRenderCommandEncoder(descriptor: renderPassDescriptor!)
+        renderEncoder?.setRenderPipelineState(renderPipelineState)
+        renderEncoder?.setVertexBuffer(densityBuffer, offset: 0, index: 0)
+        renderEncoder?.setVertexBuffer(positionsOut, offset: 0, index: 1)
+        renderEncoder?.setVertexBuffer(renderParams, offset: 0, index: 2)
+        renderEncoder?.setVertexBuffer(computeParams, offset: 0, index: 3)
+        renderEncoder?.drawPrimitives(type: MTLPrimitiveType.point, vertexStart: 0, vertexCount: numberOfObjects)
+        renderEncoder?.endEncoding()
 
         buffer!.present(view.currentDrawable!)
         buffer!.commit()

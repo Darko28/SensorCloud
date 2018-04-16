@@ -26,7 +26,7 @@ class Camera: NSObject {
         let fov = DegreesToRadians(60.0)
         let aspect = Float(UIScreen.main.bounds.size.width / UIScreen.main.bounds.size.height)
         let near: Float = 0.01
-        let far: Float = 150.0
+        let far: Float = 300.0
         
         projectionMatrix = Matrix4.perspectiveMatrix(fov: fov, aspect: aspect, near: near, far: far)
         setProjectionMatrix()
